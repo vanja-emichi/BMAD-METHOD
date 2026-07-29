@@ -21,6 +21,18 @@ platforms:
       target_dir: .adal/skills
       global_target_dir: ~/.adal/skills
 
+  agent-zero:
+    name: "Agent Zero"
+    preferred: false
+    installer:
+      # Agent Zero reads BMAD skills natively from its plugin bundle (usr/plugins/*/skills)
+      # and does NOT use per-project skill copies. target_dir is null (no deployment dir)
+      # and skip_deployment short-circuits setup() so `bmad install --tools agent-zero`
+      # scaffolds only _bmad/ (manifest, config, scripts) and writes nothing into the
+      # project's skill tree. This is the native alternative to skipIde/empty-ides.
+      target_dir: null
+      skip_deployment: true
+
   amp:
     name: "Sourcegraph Amp"
     preferred: false

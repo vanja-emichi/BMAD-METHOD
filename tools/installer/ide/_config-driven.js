@@ -187,6 +187,19 @@ class ConfigDrivenIdeSetup {
    * @returns {Promise<Object>} Setup result
    */
   async setup(projectDir, bmadDir, options = {}) {
+    // Native-skill platforms (e.g. agent-zero) ship skills via their host plugin
+    // and read them natively — they must not receive per-project skill copies.
+    // skip_deployment makes this platform a no-op for skill deployment while still
+    // letting `bmad install --tools agent-zero` scaffold _bmad/ (manifest/config/scripts).
+    if (this.installerConfig?.skip_deployment) {
+      if (!options.silent) {
+        await prompts.log.message(
+          `${this.name}: skills provided natively by the host — no skill copies deployed.`,
+        );
+      }
+      return { success: true, results: { skills: 0, skillDirectories: 0, skipped: 'native-deployment' } };
+    }
+
     // Check for BMAD files in ancestor directories that would cause duplicates
     if (this.installerConfig?.ancestor_conflict_check) {
       const conflict = await this.findAncestorConflict(projectDir);
