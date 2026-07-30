@@ -31,23 +31,34 @@ def _yaml_scalar(text: str) -> Any:
 
 
 def _load_yaml_subset(path: Path) -> dict[str, Any]:
-    """Minimal stdlib fallback for BMAD's config.yaml (nested maps + scalars only).
+    """Minimal stdlib fallback for BMAD's config.yaml (nested maps + scalars).
 
-    Returns {} on any structural surprise — callers treat YAML as a best-effort
-    legacy layer, so a parse issue must never break the (authoritative) TOML read.
+    Tolerant by design: lines it can't place (list items, multi-line-scalar
+    continuations, anchors) are SKIPPED, never fatal — callers treat YAML as a
+    best-effort legacy layer, so a quirk must not break the authoritative TOML
+    read. Multi-line folded scalars (e.g. a wrapped `description:`) keep their
+    first line; continuation lines (deeper-indented than the scalar key) are
+    skipped.
     """
     try:
         root: dict[str, Any] = {}
         stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+        cont_below: int | None = None  # scalar key indent; deeper lines are its continuations
         for raw in path.read_text(encoding="utf-8").splitlines():
             if not raw.strip() or raw.lstrip().startswith("#"):
                 continue
             indent = len(raw) - len(raw.lstrip(" "))
             line = raw.strip()
+            # Skip continuation lines of a multi-line (folded) scalar value.
+            if cont_below is not None and indent > cont_below:
+                continue
+            cont_below = None
             if ":" not in line:
-                return {}  # sequences / multiline / anchors → outside our subset
+                continue  # list item / anchor / stray → outside our subset, skip
             key, _, val = line.partition(":")
             key = key.strip().strip('"').strip("'")
+            if not key:
+                continue
             val = val.split(" #", 1)[0].strip()  # strip inline comment
             while stack and indent <= stack[-1][0]:
                 stack.pop()
@@ -60,6 +71,7 @@ def _load_yaml_subset(path: Path) -> dict[str, Any]:
                 stack.append((indent, node))
             else:
                 parent[key] = _yaml_scalar(val)
+                cont_below = indent  # following deeper-indented lines are continuations
         return root
     except Exception:
         return {}
