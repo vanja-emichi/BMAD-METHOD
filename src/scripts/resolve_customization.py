@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +26,16 @@ _MISSING = object()
 
 
 def find_project_root(start: Path) -> Path | None:
+    # Hosts that know the project root explicitly (e.g. the Agent Zero plugin,
+    # where skills are bundled under the plugin repo rather than the project)
+    # can pass it via BMAD_PROJECT_ROOT. This takes precedence over the walk-up
+    # heuristic, which would otherwise resolve to the plugin's own .git and
+    # silently ignore team/user customization overrides.
+    env_root = os.environ.get("BMAD_PROJECT_ROOT", "").strip()
+    if env_root:
+        root = Path(env_root).expanduser()
+        if root.is_dir():
+            return root.resolve()
     current = start.resolve()
     while True:
         if (current / "_bmad").exists() or (current / ".git").exists():
@@ -59,25 +70,34 @@ def main() -> int:
         "--skill", "-s", required=True, help="Absolute path to the skill directory"
     )
     parser.add_argument(
-        "--project-root",
-        "-p",
-        help="Explicit project root containing _bmad/ (recommended)",
-    )
-    parser.add_argument(
         "--key",
         "-k",
         action="append",
         default=[],
         help="Dotted field path to resolve (repeatable). Omit for full dump.",
     )
+    parser.add_argument(
+        "--project-root", "-p",
+        help="Absolute path to the project root (contains _bmad/). Use this when "
+             "skills are bundled outside the project (e.g. the Agent Zero plugin); "
+             "overrides the walk-up heuristic and the BMAD_PROJECT_ROOT env var. "
+             "Mirrors resolve_config.py --project-root.",
+    )
     args = parser.parse_args()
 
     skill_dir = Path(args.skill).resolve()
-    project_root = (
-        Path(args.project_root).resolve()
-        if args.project_root
-        else find_project_root(skill_dir) or find_project_root(Path.cwd())
-    )
+    # Project-root resolution: explicit --project-root (validated) > BMAD_PROJECT_ROOT
+    # env var (inside find_project_root) > walk-up heuristic. The walk-up is unsafe
+    # when skills live under a plugin repo (it hits the plugin's .git), which is
+    # exactly why --project-root / the env var exist.
+    if args.project_root:
+        project_root = Path(args.project_root).expanduser().resolve()
+        if not project_root.is_dir():
+            sys.stderr.write(f"error: --project-root not a directory: {project_root}\n")
+            return 1
+    else:
+        project_root = find_project_root(skill_dir) or find_project_root(Path.cwd())
+
     try:
         merged = load_customization(project_root, skill_dir)
     except ConfigError as error:

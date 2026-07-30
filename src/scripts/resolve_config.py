@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,10 +40,10 @@ def main() -> int:
         description="Resolve BMad central config using four-layer TOML merge."
     )
     parser.add_argument(
-        "--project-root",
-        "-p",
-        required=True,
-        help="Absolute project root containing _bmad/",
+        "--project-root", "-p",
+        help="Absolute path to the project root (contains _bmad/). Falls back to "
+             "the BMAD_PROJECT_ROOT env var; required if neither is set. Mirrors "
+             "resolve_customization.py.",
     )
     parser.add_argument(
         "--key",
@@ -53,8 +54,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    root_arg = (args.project_root or os.environ.get("BMAD_PROJECT_ROOT", "")).strip()
+    if not root_arg:
+        parser.error("--project-root is required (or set the BMAD_PROJECT_ROOT env var)")
     try:
-        merged = load_central_config(Path(args.project_root).resolve())
+        merged = load_central_config(Path(root_arg).expanduser().resolve())
     except ConfigError as error:
         sys.stderr.write(f"error: {error}\n")
         return 1
