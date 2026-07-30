@@ -37,6 +37,7 @@ description/prompt.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -56,6 +57,16 @@ _KEYED_MERGE_FIELDS = ("code", "id")
 
 
 def find_project_root(start: Path):
+    # Hosts that know the project root explicitly (e.g. the Agent Zero plugin,
+    # where skills are bundled under the plugin repo rather than the project)
+    # can pass it via BMAD_PROJECT_ROOT. This takes precedence over the walk-up
+    # heuristic, which would otherwise resolve to the plugin's own .git and
+    # silently ignore team/user customization overrides.
+    env_root = os.environ.get("BMAD_PROJECT_ROOT", "").strip()
+    if env_root:
+        root = Path(env_root).expanduser()
+        if root.is_dir():
+            return root.resolve()
     current = start.resolve()
     while True:
         if (current / "_bmad").exists() or (current / ".git").exists():
@@ -200,6 +211,13 @@ def main():
         "--key", "-k", action="append", default=[],
         help="Dotted field path to resolve (repeatable). Omit for full dump.",
     )
+    parser.add_argument(
+        "--project-root", "-p",
+        help="Absolute path to the project root (contains _bmad/). Use this when "
+             "skills are bundled outside the project (e.g. the Agent Zero plugin); "
+             "overrides the walk-up heuristic and the BMAD_PROJECT_ROOT env var. "
+             "Mirrors resolve_config.py --project-root.",
+    )
     args = parser.parse_args()
 
     skill_dir = Path(args.skill).resolve()
@@ -208,11 +226,18 @@ def main():
 
     defaults = load_toml(defaults_path, required=True)
 
-    # Prefer the project that contains this skill. Only fall back to cwd if
-    # the skill isn't inside a recognizable project tree (unusual but possible
-    # for standalone skills invoked directly). Using cwd first is unsafe when
-    # an ancestor of cwd happens to have a stray _bmad/ from another project.
-    project_root = find_project_root(skill_dir) or find_project_root(Path.cwd())
+    # Project-root resolution order: explicit --project-root > BMAD_PROJECT_ROOT
+    # env var (inside find_project_root) > walk-up heuristic from the skill dir,
+    # then cwd. The walk-up is unsafe when skills live under a plugin repo (it
+    # hits the plugin's .git), which is exactly why --project-root / the env var
+    # exist.
+    if args.project_root:
+        project_root = Path(args.project_root).expanduser().resolve()
+        if not project_root.is_dir():
+            sys.stderr.write(f"error: --project-root not a directory: {project_root}\n")
+            sys.exit(1)
+    else:
+        project_root = find_project_root(skill_dir) or find_project_root(Path.cwd())
 
     team = {}
     user = {}

@@ -28,6 +28,7 @@ Merge rules (same as resolve_customization.py):
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -141,8 +142,10 @@ def main():
         description="Resolve BMad central config using four-layer TOML merge.",
     )
     parser.add_argument(
-        "--project-root", "-p", required=True,
-        help="Absolute path to the project root (contains _bmad/)",
+        "--project-root", "-p",
+        help="Absolute path to the project root (contains _bmad/). Falls back to "
+             "the BMAD_PROJECT_ROOT env var; required if neither is set. Mirrors "
+             "resolve_customization.py.",
     )
     parser.add_argument(
         "--key", "-k", action="append", default=[],
@@ -150,7 +153,10 @@ def main():
     )
     args = parser.parse_args()
 
-    project_root = Path(args.project_root).resolve()
+    root_arg = (args.project_root or os.environ.get("BMAD_PROJECT_ROOT", "")).strip()
+    if not root_arg:
+        parser.error("--project-root is required (or set the BMAD_PROJECT_ROOT env var)")
+    project_root = Path(root_arg).expanduser().resolve()
     bmad_dir = project_root / "_bmad"
 
     base_team = load_toml(bmad_dir / "config.toml", required=True)
