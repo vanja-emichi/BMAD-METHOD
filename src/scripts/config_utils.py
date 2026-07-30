@@ -14,6 +14,75 @@ class ConfigError(ValueError):
 _KEYED_MERGE_FIELDS = ("code", "id")
 
 
+def _yaml_scalar(text: str) -> Any:
+    """Coerce a plain YAML scalar (string/number/bool/null) for the subset we read."""
+    s = text.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1]
+    low = s.lower()
+    if low in ("true", "yes", "on"): return True
+    if low in ("false", "no", "off"): return False
+    if low in ("null", "~", ""): return None
+    try: return int(s)
+    except ValueError: pass
+    try: return float(s)
+    except ValueError: pass
+    return s
+
+
+def _load_yaml_subset(path: Path) -> dict[str, Any]:
+    """Minimal stdlib fallback for BMAD's config.yaml (nested maps + scalars only).
+
+    Returns {} on any structural surprise — callers treat YAML as a best-effort
+    legacy layer, so a parse issue must never break the (authoritative) TOML read.
+    """
+    try:
+        root: dict[str, Any] = {}
+        stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip(" "))
+            line = raw.strip()
+            if ":" not in line:
+                return {}  # sequences / multiline / anchors → outside our subset
+            key, _, val = line.partition(":")
+            key = key.strip().strip('"').strip("'")
+            val = val.split(" #", 1)[0].strip()  # strip inline comment
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            if not stack:
+                return {}
+            parent = stack[-1][1]
+            if val == "":
+                node: dict[str, Any] = {}
+                parent[key] = node
+                stack.append((indent, node))
+            else:
+                parent[key] = _yaml_scalar(val)
+        return root
+    except Exception:
+        return {}
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    """Load a legacy config.yaml as a best-effort layer ({} if absent/unreadable).
+
+    Prefers PyYAML when available; otherwise a stdlib subset parser. Never raises —
+    config.yaml is a legacy layer and must not break the authoritative TOML config.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except ImportError:
+        return _load_yaml_subset(path)
+    except Exception:
+        return {}
+
+
 def load_toml(path: Path, *, required: bool = False) -> dict[str, Any]:
     """Load a TOML table, allowing absence only for optional layers."""
     if not path.exists():
@@ -99,6 +168,12 @@ def load_central_config(project_root: Path) -> dict[str, Any]:
     bmad_dir = project_root / "_bmad"
     return merge_layers(
         (
+            # Legacy YAML first (lowest precedence): bmad is mid-migration from
+            # config.yaml → config.toml, and many installed skills/scripts still
+            # write config.yaml. Reading it as a base layer keeps those values
+            # resolvable; config.toml (authoritative) overrides it.
+            load_yaml(bmad_dir / "config.yaml"),
+            load_yaml(bmad_dir / "config.user.yaml"),
             load_toml(bmad_dir / "config.toml", required=True),
             load_toml(bmad_dir / "config.user.toml"),
             load_toml(bmad_dir / "custom" / "config.toml"),
